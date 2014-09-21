@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+
+<html>
+<body>
+
+<textarea id="text" style="height:400px;width:800px">
+var k = 3;
+var w = window;
+k = w.location + 'm';
+document.write('your location' + k);
+</textarea>
+
+<br>
+<button onclick="transfer()">transfer</button>
+
+<script src="3rdparty/jquery-1.9.1.js"></script>
+<script src="3rdparty/esprima.js"></script>
+<script src="3rdparty/esmangle.browser.js"></script>
+<script src="3rdparty/escodegen.browser.js"></script>
+<script src="3rdparty/estraverse.js"></script>
+<script src="3rdparty/escope.js"></script>
+<script src="3rdparty/esrefactor.js"></script>
+
+
+
+<script>
+
+var sinks = ["innerHTML","value","createContextualFragment","writeln","write","src","text"]
+
+function transfer(){
+	var text = $("#text").val();
+	console.log(text);
+	ast = esprima.parse(text,{loc:true});
+	text = escodegen.generate(ast);
+	ast = esprima.parse(text,{loc:true});
+	//ast = esmangle.optimize(ast);
+	estraverse.traverse(ast, {
+	    enter: function (node, parent) {
+	       // if (node.type == 'FunctionExpression' || node.type == 'FunctionDeclaration')
+	       //     return estraverse.VisitorOption.Skip;
+	    },
+	    leave: function (node, parent) {
+	        if (node.type == 'MemberExpression' && $.inArray(node.property.name,sinks)!=-1)
+	          console.log(node.loc.start.line + ": " +node.object.name +"."+ node.property.name);
+	    }
+	});
+
+	esc = escope.analyze(ast);
+	mainscope = esc.scopes[0]
+	kvar = esc.scopes[0].variables[0];
+	//esr  =esrefactor.Context(ast);
+	//console.log(esr);
+	console.log(esc);
+
+	text = escodegen.generate(ast);
+
+	console.log(ast);
+	$('#text').val(text);
+
+	//var refs = GetVariableInfo(mainscope,kvar.identifiers[0]);
+	//var guessed = GuessTypeOfVariable(refs);
+	//console.log(guessed);
+
+	var cat = BuilVariableCatalogue(mainscope);
+	console.log(cat);
+}
+
+function GetVariableInfo(scope, identifier){
+	var refs = [];
+	for(var x = 0; x<scope.references.length;x++)
+	{
+		var reference = scope.references[x];
+		if(reference.identifier.name==identifier.name)
+			refs.push(reference);
+	}
+	return refs;
+}
+
+
+function BuilVariableCatalogue(scope){
+	scope.references.sort(function(ra,rb){rb.identifier.loc.start.line - ra.identifier.loc.start.line});
+
+	var cat = {};
+	
+	for(var x = 0; x<scope.references.length;x++)
+	{
+		var reference = scope.references[x];
+		if(reference.flag == 2)
+		{
+			if(cat[reference.identifier.name] == undefined)
+				cat[reference.identifier.name] = [];
+
+			cat[reference.identifier.name].push(
+				{
+					identifier:reference.identifier,
+					guessedType:GuessTypeOfVariable(reference.writeExpr,cat)
+				}
+			);
+		}
+	}
+
+	return cat;
+}
+
+
+var globals = {"window":"gobalwindow","document":"globaldocument","alert":"globalalert"}
+
+function IsBrowserType(type){
+	for(var g in globals){
+		if(globals[g]==type.split('.')[0]){
+			return true;
+		}
+	}
+	return false;
+}
+
+function GetVariableTypeFromCatalogue(identfier,cat){
+	// return browser objects
+	if(identfier.name in globals)
+		return globals[identfier.name];
+
+	if(!(identfier.name in cat))
+		return "unknown";
+
+	var entries = cat[identfier.name];
+
+	return entries[entries.length-1].guessedType;
+}
+
+function GuessTypeOfVariable(expression, cat)
+{	
+	if(expression.type == "Literal")
+		return "basetype";
+	if(expression.type == "Identifier")
+	{
+		var v = GetVariableTypeFromCatalogue(expression,cat);
+		if(v == "unknown")
+			return expression.name;
+		else
+			return v;
+	}
+	if(expression.type == "MemberExpression")
+	{
+		var objType = GetVariableTypeFromCatalogue(expression.object,cat);
+		return objType + "." + expression.property.name;
+	}
+	if(expression.type == "BinaryExpression")
+	{
+		var objTypeLeft = GuessTypeOfVariable(expression.left,cat);
+		var objTypeRight = GuessTypeOfVariable(expression.right,cat);
+
+		if(IsBrowserType(objTypeLeft))
+			return objTypeLeft;
+		else
+			return objTypeRight;
+	}
+	return "null";
+}
+
+</script>
+</body>
+</html>
